@@ -321,35 +321,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun forwardMessage(msg: String) {
 
-        val bytes = msg.toByteArray()
-
-        if (isServerRole) {
-            val service = gattServer?.getService(SERVICE_UUID)
-            val characteristic = service?.getCharacteristic(CHAR_UUID)
-
-            characteristic?.value = bytes
-
-            for (device in connectedDevices) {
-                gattServer?.notifyCharacteristicChanged(
-                    device,
-                    characteristic,
-                    false
-                )
-            }
-        }
-
-
-        else {
-            val service = bluetoothGatt?.getService(SERVICE_UUID)
-            val characteristic = service?.getCharacteristic(CHAR_UUID)
-
-            characteristic?.value = bytes
-            bluetoothGatt?.writeCharacteristic(characteristic)
-        }
-    }
     private fun startScan(onDeviceFound: (BluetoothDevice) -> Unit) {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
 
@@ -370,6 +342,60 @@ class MainActivity : ComponentActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             if (isScanning) stopScan()
         }, 10000)
+    }
+
+    private fun createJsonMessage(text: String): String{
+        return JSONObject().apply {
+            put("id", UUID.randomUUID().toString())
+            put("sender",bluetoothAdapter?.name ?:"Unknown")
+            put("text",text)
+            put("ttl", 3)
+            put("timestamp", System.currentTimeMillis())
+        }.toString()
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun forwardMessage(msg: String) {
+        try{
+            val parsed = JSONObject(msg)
+            val id = parsed.optString(("id"), ( ""))
+            var ttl = parsed.optInt("ttl", 0)
+
+            if(ttl <= 0){
+                Log.d("MESH", "Packet expired: $id")
+                return
+            }
+            ttl--
+            parsed.put("ttl",ttl)
+            val updatedMsg = parsed.toString()
+            val bytes = updatedMsg.toByteArray()
+
+            Log.d("MESH", "Forwarding packet $id with TTL $ttl")
+
+            if(isServerRole){
+                val service = gattServer?.getService(SERVICE_UUID)
+                val characteristic = 
+                    service?.getCharacteristic(CHAR_UUID)
+                characteristic?.value = bytes
+                
+                for(device in connectedDevices){
+                    gattServer?.notifyCharacteristicChanged(
+                        device,
+                        characteristic,
+                        false
+                    )
+                }
+            } else {
+                val service = 
+                    bluetoothGatt?.getService(SERVICE_UUID)
+                val characteristic = 
+                    service?.getCharacteristic(CHAR_UUID)
+                characteristic?.value = bytes
+                bluetoothGatt?.writeCharacteristic(characteristic)
+            }
+        } catch (e: Exception){
+            Log.e("MESH","Forward Failed: ${e.message}")
+        }
     }
 
     private fun stopScan() {
@@ -437,12 +463,11 @@ class MainActivity : ComponentActivity() {
 
             if (seenMessage.contains(id)) return
             seenMessage.add(id)
-            chatMessages.add(ChatMessage(msg, "Remote"))
-            forwardMessage(msg)
-
-            runOnUiThread {
-                chatMessages.add(ChatMessage(msg, "Remote"))
-            }
+            chatMessages.add(ChatMessage(text, sender))
+            val ttl = parsed.optInt("ttl",0)
+            if (ttl <= 0) return
+            parsed.put("ttl", ttl - 1)
+            forwardMessage(parsed.toString())
         }
 
         @Deprecated("Deprecated in Java")
@@ -480,7 +505,6 @@ class MainActivity : ComponentActivity() {
         service.addCharacteristic(characteristic)
         gattServer?.addService(service)
 
-        // 2. Start Advertising so others can find us
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
@@ -540,6 +564,11 @@ class MainActivity : ComponentActivity() {
             if (seenMessage.contains(id)) return
             seenMessage.add(id)
 
+            val ttl = parsed.optInt("ttl", 0)
+            if(ttl <= 0) return
+            parsed.put("ttl", ttl - 1)
+            forwardMessage(parsed.toString())
+
             Log.d("JSON", msg)
             Log.d("BLE", "Received: $msg")
             runOnUiThread {
@@ -579,18 +608,18 @@ class MainActivity : ComponentActivity() {
             val service = gattServer?.getService(SERVICE_UUID)
             val characteristic = service?.getCharacteristic(CHAR_UUID)
             if (characteristic != null) {
-                val value = message.toByteArray()
+                val jsonMessage = createJsonMessage(message)
                 for (device in connectedDevices) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        gattServer?.notifyCharacteristicChanged(device, characteristic, false, value)
+                        gattServer?.notifyCharacteristicChanged(device, characteristic, false, jsonMessage.toByteArray())
                     } else {
                         @Suppress("DEPRECATION")
-                        characteristic.value = value
+                        characteristic.value = jsonMessage.toByteArray()
                         @Suppress("DEPRECATION")
                         gattServer?.notifyCharacteristicChanged(device, characteristic, false)
                     }
                 }
-                chatMessages.add(ChatMessage(message, "Me"))
+                chatMessages.add(ChatMessage(jsonMessage, "Me"))
             }
         } else {
             // Client: Write to server's characteristic
