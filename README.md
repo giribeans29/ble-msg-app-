@@ -71,11 +71,10 @@ Messages are forwarded through nearby devices until they reach the target device
 - [x] GATT server/client setup
 
 ## In Progress
-- [ ] Multi-hop routing optimization
-- [ ] Delivery acknowledgements
+- [x] Multi-hop routing optimization
+- [x] Delivery acknowledgements
 - [ ] Message encryption
 - [ ] Improved UI/UX
-- [ ] Connection stability improvements
 
 ## Planned Features
 - [ ] Geofencing support
