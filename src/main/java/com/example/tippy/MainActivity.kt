@@ -430,6 +430,7 @@ class MainActivity : ComponentActivity() {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     connectionStatus = "Connected to ${gatt.device.address}"
                     if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                        gatt.requestMtu(512)
                         gatt.discoverServices()
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -437,6 +438,11 @@ class MainActivity : ComponentActivity() {
                     bluetoothGatt = null
                 }
             }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
+            super.onMtuChanged(gatt, mtu, status)
+            Log.d("BLE", "MTU changed to $mtu, status: $status")
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -467,21 +473,25 @@ class MainActivity : ComponentActivity() {
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             val msg = String(value)
-            val parsed = JSONObject(msg)
-            val id = parsed.optString("id","")
-            val text = parsed.optString("text","")
-            val sender = parsed.optString("sender","")
+            try {
+                val parsed = JSONObject(msg)
+                val id = parsed.optString("id", "")
+                val text = parsed.optString("text", "")
+                val sender = parsed.optString("sender", "")
 
-            Log.d("MESH", "Received packet: $msg")
-            if (seenMessage.contains(id)) {
-                Log.d("MESH", "Duplicate ignored: $id")
-                return
+                Log.d("MESH", "Received packet: $msg")
+                if (seenMessage.contains(id)) {
+                    Log.d("MESH", "Duplicate ignored: $id")
+                    return
+                }
+                seenMessage.add(id)
+                chatMessages.add(ChatMessage(text, sender))
+                val ttl = parsed.optInt("ttl", 0)
+                if (ttl <= 0) return
+                forwardMessage(parsed.toString())
+            } catch (e: Exception) {
+                Log.e("MESH", "Error parsing JSON from characteristic change: ${e.message}. Data may be truncated.")
             }
-            seenMessage.add(id)
-            chatMessages.add(ChatMessage(text, sender))
-            val ttl = parsed.optInt("ttl",0)
-            if (ttl <= 0) return
-            forwardMessage(parsed.toString())
         }
     }
 
@@ -550,6 +560,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        override fun onMtuChanged(device: BluetoothDevice?, mtu: Int) {
+            Log.d("BLE", "Server MTU changed for ${device?.address} to $mtu")
+        }
+
         override fun onCharacteristicWriteRequest(
             device: BluetoothDevice,
             requestId: Int,
@@ -560,27 +574,35 @@ class MainActivity : ComponentActivity() {
             value: ByteArray
         ) {
             val msg = String(value)
-            val parsed = JSONObject(msg)
-            val id = parsed.optString("id","")
-            val text = parsed.optString("text","")
-            val sender = parsed.optString("sender","")
+            try {
+                val parsed = JSONObject(msg)
+                val id = parsed.optString("id", "")
+                val text = parsed.optString("text", "")
+                val sender = parsed.optString("sender", "")
 
-            if (seenMessage.contains(id)) return
-            seenMessage.add(id)
+                if (seenMessage.contains(id)) return
+                seenMessage.add(id)
 
+                val ttl = parsed.optInt("ttl", 0)
+                if (ttl > 0) {
+                    if (ActivityCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        forwardMessage(parsed.toString())
+                    }
+                }
 
-            val ttl = parsed.optInt("ttl", 0)
-            if(ttl <= 0) return
-            if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                forwardMessage(parsed.toString())
+                Log.d("JSON", msg)
+                Log.d("BLE", "Received: $msg")
+                runOnUiThread {
+                    chatMessages.add(ChatMessage(text, sender))
+                }
+            } catch (e: Exception) {
+                Log.e("BLE", "Error parsing JSON in write request: ${e.message}. Data may be truncated.")
             }
 
-            Log.d("JSON", msg)
-            Log.d("BLE", "Received: $msg")
-            runOnUiThread {
-                chatMessages.add(ChatMessage(text, sender))
-            }
-            
             if (responseNeeded) {
                 if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
