@@ -3,7 +3,6 @@ package com.example.tippy
 import android.Manifest
 import android.bluetooth.*
 import android.bluetooth.le.*
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.*
 import android.util.Log
@@ -21,7 +20,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
@@ -57,10 +55,9 @@ class MainActivity : ComponentActivity() {
     private val connectedDevices = mutableStateListOf<BluetoothDevice>()
 
     // UUIDs for our custom service and characteristic (Must match on both devices)
-    private val SERVICE_UUID = UUID.fromString("00001234-0000-1000-8000-00805f9b34fb")
-    private val CHAR_UUID = UUID.fromString("0000abcd-0000-1000-8000-00805f9b34fb")
-    // Client Characteristic Configuration Descriptor (CCCD)
-    private val CCC_DESCRIPTOR_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+    private val serviceUuid = UUID.fromString("00001234-0000-1000-8000-00805f9b34fb")
+    private val charUuid = UUID.fromString("0000abcd-0000-1000-8000-00805f9b34fb")
+    private val cccDescriptorUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     // Reactive states for UI
     private var connectionStatus by mutableStateOf("Disconnected")
@@ -74,7 +71,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val manager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = manager.adapter
         scanner = bluetoothAdapter?.bluetoothLeScanner
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
@@ -82,7 +79,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             TippyTheme {
                 val context = LocalContext.current
-                val seenMessage = mutableSetOf<String>()
                 val devices = remember { mutableStateListOf<BluetoothDevice>() }
                 var messageToSend by remember { mutableStateOf("") }
 
@@ -122,7 +118,7 @@ class MainActivity : ComponentActivity() {
                         @OptIn(ExperimentalMaterial3Api::class)
                         CenterAlignedTopAppBar(
                             title = { Text("BLE Chat & Scan", fontWeight = FontWeight.Bold) },
-                            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                            colors = TopAppBarDefaults.topAppBarColors(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer
                             )
                         )
@@ -301,7 +297,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 "Permission Required"
             }
-        } catch (e: SecurityException) {
+        } catch (_ : SecurityException) {
             "Unknown Device"
         }
         
@@ -344,11 +340,16 @@ class MainActivity : ComponentActivity() {
         }, 10000)
     }
 
-    private fun createJsonMessage(text: String): String{
+    private fun createJsonMessage(text: String): String {
+        val senderName = if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+            bluetoothAdapter?.name ?: "Unknown"
+        } else {
+            "Unknown"
+        }
         return JSONObject().apply {
             put("id", UUID.randomUUID().toString())
-            put("sender",bluetoothAdapter?.name ?:"Unknown")
-            put("text",text)
+            put("sender", senderName)
+            put("text", text)
             put("ttl", 3)
             put("timestamp", System.currentTimeMillis())
         }.toString()
@@ -373,25 +374,35 @@ class MainActivity : ComponentActivity() {
             Log.d("MESH", "Forwarding packet $id with TTL $ttl")
 
             if(isServerRole){
-                val service = gattServer?.getService(SERVICE_UUID)
-                val characteristic = 
-                    service?.getCharacteristic(CHAR_UUID)
-                characteristic?.value = bytes
+                val service = gattServer?.getService(serviceUuid)
+                val characteristic = service?.getCharacteristic(charUuid)
                 
-                for(device in connectedDevices){
-                    gattServer?.notifyCharacteristicChanged(
-                        device,
-                        characteristic,
-                        false
-                    )
+                if (characteristic != null) {
+                    for(device in connectedDevices){
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            gattServer?.notifyCharacteristicChanged(device, characteristic, false, bytes)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            characteristic.value = bytes
+                            @Suppress("DEPRECATION")
+                            gattServer?.notifyCharacteristicChanged(device, characteristic, false)
+                        }
+                    }
                 }
             } else {
-                val service = 
-                    bluetoothGatt?.getService(SERVICE_UUID)
-                val characteristic = 
-                    service?.getCharacteristic(CHAR_UUID)
-                characteristic?.value = bytes
-                bluetoothGatt?.writeCharacteristic(characteristic)
+                val service = bluetoothGatt?.getService(serviceUuid)
+                val characteristic = service?.getCharacteristic(charUuid)
+                
+                if (characteristic != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        bluetoothGatt?.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        characteristic.value = bytes
+                        @Suppress("DEPRECATION")
+                        bluetoothGatt?.writeCharacteristic(characteristic)
+                    }
+                }
             }
         } catch (e: Exception){
             Log.e("MESH","Forward Failed: ${e.message}")
@@ -432,12 +443,12 @@ class MainActivity : ComponentActivity() {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d("BLE", "Services discovered")
                 // Enable notifications on the characteristic
-                val service = gatt.getService(SERVICE_UUID)
-                val characteristic = service?.getCharacteristic(CHAR_UUID)
+                val service = gatt.getService(serviceUuid)
+                val characteristic = service?.getCharacteristic(charUuid)
                 if (characteristic != null) {
                     if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                         gatt.setCharacteristicNotification(characteristic, true)
-                        val descriptor = characteristic.getDescriptor(CCC_DESCRIPTOR_UUID)
+                        val descriptor = characteristic.getDescriptor(cccDescriptorUuid)
                         if (descriptor != null) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
@@ -461,23 +472,16 @@ class MainActivity : ComponentActivity() {
             val text = parsed.optString("text","")
             val sender = parsed.optString("sender","")
 
-            if (seenMessage.contains(id)) return
+            Log.d("MESH", "Received packet: $msg")
+            if (seenMessage.contains(id)) {
+                Log.d("MESH", "Duplicate ignored: $id")
+                return
+            }
             seenMessage.add(id)
             chatMessages.add(ChatMessage(text, sender))
             val ttl = parsed.optInt("ttl",0)
             if (ttl <= 0) return
-            parsed.put("ttl", ttl - 1)
             forwardMessage(parsed.toString())
-        }
-
-        @Deprecated("Deprecated in Java")
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            @Suppress("DEPRECATION")
-            val value = characteristic.value
-            val msg = value?.let { String(it) } ?: ""
-            runOnUiThread {
-                chatMessages.add(ChatMessage(msg, "Remote"))
-            }
         }
     }
 
@@ -487,17 +491,17 @@ class MainActivity : ComponentActivity() {
             ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) return
 
         isServerRole = true
-        val manager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         gattServer = manager.openGattServer(this, serverCallback)
 
-        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val characteristic = BluetoothGattCharacteristic(
-            CHAR_UUID,
+            charUuid,
             BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_WRITE or BluetoothGattCharacteristic.PERMISSION_READ
         )
         val descriptor = BluetoothGattDescriptor(
-            CCC_DESCRIPTOR_UUID,
+            cccDescriptorUuid,
             BluetoothGattDescriptor.PERMISSION_WRITE or BluetoothGattDescriptor.PERMISSION_READ
         )
         characteristic.addDescriptor(descriptor)
@@ -514,7 +518,7 @@ class MainActivity : ComponentActivity() {
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(true)
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .addServiceUuid(ParcelUuid(serviceUuid))
             .build()
 
         advertiser?.startAdvertising(settings, data, advertiseCallback)
@@ -564,15 +568,17 @@ class MainActivity : ComponentActivity() {
             if (seenMessage.contains(id)) return
             seenMessage.add(id)
 
+
             val ttl = parsed.optInt("ttl", 0)
             if(ttl <= 0) return
-            parsed.put("ttl", ttl - 1)
-            forwardMessage(parsed.toString())
+            if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                forwardMessage(parsed.toString())
+            }
 
             Log.d("JSON", msg)
             Log.d("BLE", "Received: $msg")
             runOnUiThread {
-                chatMessages.add(ChatMessage(msg, "Remote"))
+                chatMessages.add(ChatMessage(text, sender))
             }
             
             if (responseNeeded) {
@@ -591,7 +597,7 @@ class MainActivity : ComponentActivity() {
             offset: Int,
             value: ByteArray
         ) {
-            if (descriptor.uuid == CCC_DESCRIPTOR_UUID) {
+            if (descriptor.uuid == cccDescriptorUuid) {
                 if (responseNeeded) {
                     if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -605,10 +611,12 @@ class MainActivity : ComponentActivity() {
 
         if (isServerRole) {
             // Server: Notify all connected clients
-            val service = gattServer?.getService(SERVICE_UUID)
-            val characteristic = service?.getCharacteristic(CHAR_UUID)
+            val service = gattServer?.getService(serviceUuid)
+            val characteristic = service?.getCharacteristic(charUuid)
             if (characteristic != null) {
                 val jsonMessage = createJsonMessage(message)
+                val id = JSONObject(jsonMessage).optString("id")
+                seenMessage.add(id)
                 for (device in connectedDevices) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         gattServer?.notifyCharacteristicChanged(device, characteristic, false, jsonMessage.toByteArray())
@@ -619,22 +627,27 @@ class MainActivity : ComponentActivity() {
                         gattServer?.notifyCharacteristicChanged(device, characteristic, false)
                     }
                 }
-                chatMessages.add(ChatMessage(jsonMessage, "Me"))
+                chatMessages.add(ChatMessage(message, "Me"))
             }
         } else {
             // Client: Write to server's characteristic
-            val service = bluetoothGatt?.getService(SERVICE_UUID)
-            val characteristic = service?.getCharacteristic(CHAR_UUID)
-
+            val service = bluetoothGatt?.getService(serviceUuid)
+            val characteristic = service?.getCharacteristic(charUuid)
+            val jsonMessage = createJsonMessage(message)
+            val id = JSONObject(jsonMessage).optString("id")
+            seenMessage.add(id)
             if (characteristic != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    bluetoothGatt?.writeCharacteristic(characteristic, message.toByteArray(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                    bluetoothGatt?.writeCharacteristic(characteristic,
+                        jsonMessage.toByteArray(),
+                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 } else {
                     @Suppress("DEPRECATION")
-                    characteristic.value = message.toByteArray()
+                    characteristic.value = jsonMessage.toByteArray()
                     @Suppress("DEPRECATION")
                     bluetoothGatt?.writeCharacteristic(characteristic)
                 }
+                Log.d("MESH", "Sending: $jsonMessage")
                 chatMessages.add(ChatMessage(message, "Me"))
             } else {
                 Log.e("BLE", "Characteristic not found. Are you connected to a server?")
