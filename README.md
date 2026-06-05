@@ -61,30 +61,6 @@ Messages are forwarded through nearby devices until they reach the target device
 
 ---
 
-#  Current Progress
-
-## Completed
-- [x] BLE scanning
-- [x] BLE advertising
-- [x] Device discovery
-- [x] Basic message transmission
-- [x] GATT server/client setup
-
-## In Progress
-- [x] Multi-hop routing optimization
-- [x] Delivery acknowledgements
-- [ ] Message encryption
-- [ ] Improved UI/UX
-
-## Planned Features
-- [ ] Geofencing support
-- [ ] AI-assisted routing
-- [ ] Sensor integration
-- [ ] Emergency broadcast mode
-- [ ] Distance-based communication restriction
-
----
-
 #  Installation
 
 ## 1. Clone the Repository
