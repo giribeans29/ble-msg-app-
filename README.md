@@ -126,7 +126,3 @@ This project aims to explore:
 This project is licensed under the MIT License.
 
 ---
-
-#  Project Status
-
-The project is currently under active development and experimentation.
