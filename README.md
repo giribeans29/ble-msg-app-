@@ -8,7 +8,6 @@
   <img src="https://img.shields.io/badge/Platform-Android-green">
   <img src="https://img.shields.io/badge/Language-Kotlin-purple">
   <img src="https://img.shields.io/badge/Communication-BLE-blue">
-  <img src="https://img.shields.io/badge/Status-Under%20Development-orange">
 </p>
 
 ---
